@@ -97,13 +97,16 @@ def _crawl_via_links(base_url: str, max_pages: int, robots: RobotFileParser) -> 
     return discovered[:max_pages]
 
 
-def crawl_site(base_url: str, max_pages: int = 100) -> CrawlResult:
+def crawl_site(base_url: str, max_pages: int = 100, single_page: bool = False) -> CrawlResult:
     result = CrawlResult()
     robots = _load_robots(base_url)
 
-    urls = discover_urls(base_url, max_urls=max_pages)
-    if not urls:
-        urls = _crawl_via_links(base_url, max_pages, robots)
+    if single_page:
+        urls = [base_url]
+    else:
+        urls = discover_urls(base_url, max_urls=max_pages)
+        if not urls:
+            urls = _crawl_via_links(base_url, max_pages, robots)
 
     for url in urls:
         if not robots.can_fetch(HEADERS["User-Agent"], url):
