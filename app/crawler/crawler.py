@@ -47,7 +47,9 @@ def _load_robots(base_url: str) -> RobotFileParser:
 
 def _same_domain(url: str, base_netloc: str) -> bool:
     return urlparse(url).netloc == base_netloc
-
+def _same_section(url: str, base_path_prefix: str, base_netloc: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.netloc == base_netloc and parsed.path.startswith(base_path_prefix)
 
 def _extract_links(html: str, page_url: str) -> list[str]:
     soup = BeautifulSoup(html, "html.parser")
@@ -104,7 +106,15 @@ def crawl_site(base_url: str, max_pages: int = 100, single_page: bool = False) -
     if single_page:
         urls = [base_url]
     else:
-        urls = discover_urls(base_url, max_urls=max_pages)
+        sitemap_urls = discover_urls(base_url, max_urls=max_pages)
+        remaining = max_pages - len(sitemap_urls)
+
+        link_urls: list[str] = []
+        if remaining > 0:
+            link_urls = _crawl_via_links(base_url, remaining, robots)
+
+        urls = list(dict.fromkeys(sitemap_urls + link_urls))[:max_pages]
+
         if not urls:
             urls = _crawl_via_links(base_url, max_pages, robots)
 
