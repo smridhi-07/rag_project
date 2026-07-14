@@ -1,14 +1,10 @@
 """
 FastAPI app tying the whole RAG pipeline together into a real API.
 
-Two endpoints:
-  POST /sites  — crawl + chunk + embed + store a website
-  POST /chat   — ask a question, get a grounded answer with sources
-
-Note: /sites is synchronous for now — the request stays open until
-the whole crawl finishes. Fine for small sites / a demo; a production
-version would run this as a background job instead (a listed stretch
-goal, not needed yet).
+Endpoints:
+  POST /sites       — crawl + chunk + embed + store a website
+  GET  /sites/list  — list distinct domains currently indexed
+  POST /chat        — ask a question, optionally scoped to one site
 """
 
 from __future__ import annotations
@@ -22,9 +18,8 @@ from app.ingestion.embedder import embed_texts, embed_text
 from app.retrieval.vector_store import VectorStore
 from app.generation.llm import generate_answer
 
-app = FastAPI(title="RAG Website Chat")
+app = FastAPI(title="WebFi")
 
-# one shared vector store for the whole app, for now
 store = VectorStore(path="vector_store.json")
 
 
@@ -44,11 +39,13 @@ class CrawlResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str
     top_k: int = 3
+    site: str | None = None
 
 
 class ChatResponse(BaseModel):
     answer: str
     sources: list[str]
+    follow_ups: list[str]
 
 
 @app.post("/sites", response_model=CrawlResponse)
@@ -72,17 +69,22 @@ def add_site(request: CrawlRequest) -> CrawlResponse:
     )
 
 
+@app.get("/sites/list")
+def list_sites():
+    return {"sites": store.list_sites()}
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
     query_vec = embed_text(request.question)
-    results = store.search(query_vec, top_k=request.top_k)
+    results = store.search(query_vec, top_k=request.top_k, site_filter=request.site)
 
     context_chunks = [chunk.text for chunk, score in results]
-    answer = generate_answer(request.question, context_chunks)
+    answer, follow_ups = generate_answer(request.question, context_chunks)
 
     sources = list({chunk.source_url for chunk, score in results})
 
-    return ChatResponse(answer=answer, sources=sources)
+    return ChatResponse(answer=answer, sources=sources, follow_ups=follow_ups)
 
 
 @app.get("/")

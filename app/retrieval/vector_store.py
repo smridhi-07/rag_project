@@ -2,15 +2,10 @@
 A minimal file-backed vector store.
 
 Stores chunks + their embedding vectors, and supports similarity
-search. This exists in place of ChromaDB (which failed to install
-due to a Windows build-tools issue) — same core idea, simplified:
-everything lives in one JSON file, and search is a brute-force
-cosine-similarity scan across all stored vectors.
-
-This does NOT scale to millions of chunks (a real vector database
-uses specialized indexes for that), but for a single crawled site's
-worth of pages, a brute-force scan is fast enough and much simpler
-to understand and debug.
+search, optionally scoped to a specific site (domain) — this exists
+because a single store can hold chunks from many different crawled
+sites, and without filtering, retrieval would search across all of
+them mixed together.
 """
 
 from __future__ import annotations
@@ -18,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, asdict
+from urllib.parse import urlparse
 
 import numpy as np
 
@@ -64,20 +60,32 @@ class VectorStore:
             )
         self._save()
 
-    def search(self, query_embedding: list[float], top_k: int = 5) -> list[tuple[StoredChunk, float]]:
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        site_filter: str | None = None,
+    ) -> list[tuple[StoredChunk, float]]:
         """
         Returns the top_k stored chunks most similar to the query
-        embedding, as (chunk, similarity_score) pairs, sorted by
-        similarity descending.
+        embedding. If site_filter is given (a domain like
+        "docs.python.org"), only chunks from that domain are considered.
         """
-        if not self.items:
+        candidates = self.items
+        if site_filter:
+            candidates = [
+                item for item in candidates
+                if urlparse(item.source_url).netloc == site_filter
+            ]
+
+        if not candidates:
             return []
 
         query_vec = np.array(query_embedding)
         query_norm = np.linalg.norm(query_vec)
 
         scored: list[tuple[StoredChunk, float]] = []
-        for item in self.items:
+        for item in candidates:
             item_vec = np.array(item.embedding)
             similarity = np.dot(query_vec, item_vec) / (
                 query_norm * np.linalg.norm(item_vec)
@@ -86,6 +94,11 @@ class VectorStore:
 
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored[:top_k]
+
+    def list_sites(self) -> list[str]:
+        """Returns the distinct domains currently indexed, sorted."""
+        domains = {urlparse(item.source_url).netloc for item in self.items}
+        return sorted(domains)
 
     def __len__(self) -> int:
         return len(self.items)

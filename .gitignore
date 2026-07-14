@@ -4,3 +4,4 @@ __pycache__/
 .env
 vector_store.json
 test_store.json
+.pytest_cache/
