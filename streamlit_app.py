@@ -9,22 +9,14 @@ API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="WebFi", page_icon=None, layout="centered")
 
-# --- Sticky header so the title stays visible while scrolling chat history ---
 st.markdown(
     """
     <style>
-    .webfi-header {
-        position: sticky;
-        top: 0;
-        background-color: var(--background-color, #0e1117);
-        z-index: 999;
-        padding: 0.75rem 0;
-        border-bottom: 1px solid rgba(250, 250, 250, 0.1);
-        margin-bottom: 1rem;
-    }
     .webfi-header h1 {
-        margin: 0;
-        font-size: 1.6rem;
+        font-size: 2.6rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.5rem;
     }
     </style>
     <div class="webfi-header">
@@ -59,24 +51,32 @@ def ask_question(question: str, site_filter: str | None):
                 "follow_ups": data.get("follow_ups", []),
             }
         )
-    except requests.RequestException as e:
+    except requests.RequestException:
         st.session_state.messages.append(
-            {"role": "assistant", "content": f"Couldn't reach the backend: {e}", "sources": [], "follow_ups": []}
+            {
+                "role": "assistant",
+                "content": "Sorry, I couldn't connect to the app just now. Please try again in a moment.",
+                "sources": [],
+                "follow_ups": [],
+            }
         )
 
 
 # --- Sidebar: crawl a new site + pick which site to chat with ---
 with st.sidebar:
-    st.header("Index a website")
+    st.header("Add a website")
     url = st.text_input("Website URL", placeholder="https://example.com/docs")
-    max_pages = st.slider("Max pages to crawl", min_value=1, max_value=50, value=10)
-    single_page = st.checkbox("Only this exact page (skip sitemap/link crawling)")
+    max_pages = st.slider("How many pages to read (max)", min_value=1, max_value=50, value=10)
+    single_page = st.checkbox(
+        "Just this one page",
+        help="Turn this on to read only the exact page above. Leave it off to explore the whole site (up to the limit set by the slider)."
+    )
 
-    if st.button("Crawl & Index"):
+    if st.button("Add to WebFi", type="primary"):
         if not url:
-            st.error("Enter a URL first.")
+            st.error("Please enter a website URL first.")
         else:
-            with st.spinner("Crawling and indexing... this can take a while"):
+            with st.spinner("Reading the site... this can take a little while"):
                 try:
                     response = requests.post(
                         f"{API_URL}/sites",
@@ -85,14 +85,30 @@ with st.sidebar:
                     )
                     response.raise_for_status()
                     data = response.json()
-                    st.success(
-                        f"Indexed {data['pages_indexed']} pages "
-                        f"({data['chunks_added']} chunks). "
-                        f"Skipped (robots.txt): {data['skipped_robots']}, "
-                        f"Failed: {data['failed']}"
-                    )
-                except requests.RequestException as e:
-                    st.error(f"Failed to reach the API: {e}")
+
+                    pages = data["pages_indexed"]
+                    skipped = data["skipped_robots"]
+                    failed = data["failed"]
+
+                    if pages > 0:
+                        st.success(f"Added {pages} page(s) to WebFi. You can start asking questions now.")
+                        if skipped > 0 or failed > 0:
+                            st.caption(f"({skipped + failed} page(s) on this site couldn't be read.)")
+                    elif skipped > 0 and single_page:
+                        st.error(
+                            "Can't access this site — it doesn't allow this kind of reading, "
+                            "even for a single page. This is the site's own choice, not something WebFi can work around."
+                        )
+                    elif skipped > 0:
+                        st.warning(
+                            "This site doesn't allow it to be read this way. "
+                            "Try turning on 'Just this one page' and adding the exact page you want instead."
+                        )
+                    else:
+                        st.warning("Nothing readable was found at that address. Double-check the URL and try again.")
+
+                except requests.RequestException:
+                    st.error("Couldn't reach the app right now. Please try again in a moment.")
 
     st.divider()
 
@@ -100,39 +116,45 @@ with st.sidebar:
     try:
         sites_resp = requests.get(f"{API_URL}/sites/list", timeout=5).json()
         available_sites = sites_resp.get("sites", [])
+        backend_ok = True
     except requests.RequestException:
         available_sites = []
+        backend_ok = False
 
-    site_options = ["All indexed sites"] + available_sites
-    selected_site = st.selectbox("Scope your questions to:", site_options)
+    site_options = ["All added sites"] + available_sites
+    selected_site = st.selectbox("Focus your questions on:", site_options)
 
     st.divider()
-    try:
-        status = requests.get(f"{API_URL}/", timeout=5).json()
-        st.caption(f"Currently indexed: {status['chunks_indexed']} chunks")
-    except requests.RequestException:
-        st.caption("Backend not reachable — is uvicorn running?")
+    if backend_ok:
+        try:
+            status = requests.get(f"{API_URL}/", timeout=5).json()
+            count = status["chunks_indexed"]
+            st.caption(f"WebFi currently knows about {count} piece(s) of content.")
+        except requests.RequestException:
+            backend_ok = False
+
+    if not backend_ok:
+        st.caption("WebFi isn't running right now. Please start the app and refresh this page.")
 
 # --- Main chat area ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
         if message.get("sources"):
-            with st.expander("Sources"):
+            with st.expander("Where this came from"):
                 for src in message["sources"]:
                     st.write(src)
 
-# show follow-up buttons after the most recent assistant message only
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
     follow_ups = st.session_state.messages[-1].get("follow_ups", [])
     if follow_ups:
-        st.caption("Follow-up questions:")
+        st.caption("You might also ask:")
         cols = st.columns(len(follow_ups))
         for col, fq in zip(cols, follow_ups):
             if col.button(fq, key=f"fu_{fq}"):
                 st.session_state.pending_question = fq
 
-question = st.chat_input("Ask a question about the indexed content...")
+question = st.chat_input("Ask a question about the sites you've added...")
 
 if question:
     st.session_state.pending_question = question
@@ -140,6 +162,7 @@ if question:
 if st.session_state.pending_question:
     q = st.session_state.pending_question
     st.session_state.pending_question = None
+    site_arg = None if selected_site == "All added sites" else selected_site
     with st.spinner("Thinking..."):
-        ask_question(q, selected_site)
+        ask_question(q, site_arg)
     st.rerun()
